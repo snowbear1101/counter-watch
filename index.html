@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://*.tile.openstreetmap.org https://tile.openstreetmap.org https://cdnjs.cloudflare.com; connect-src 'self' https://*.supabase.co; base-uri 'none'; form-action 'self'">
-<meta name="referrer" content="same-origin">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Counter Watch</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@600;700;800&family=Atkinson+Hyperlegible:wght@400;700&family=IBM+Plex+Mono:wght@500&display=swap">
@@ -380,7 +380,7 @@ function renderLive(){
   boardMap = null; boardFitted = false;
   if (hasMap()) {
     boardMap = L.map("map", { scrollWheelZoom: false });
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(boardMap);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(boardMap);
     boardMap.setView([1.3521, 103.8198], 11);
     boardLayer = L.layerGroup().addTo(boardMap);
   }
@@ -480,7 +480,7 @@ async function openShift(id){
   $("#dlgClose").onclick = () => $("#dlg").close();
   if (hasMap() && c) {
     const m = L.map("pmap");
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(m);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(m);
     L.circle([c.lat, c.lng], { radius: c.radius_m, color: "#0f5c6e", weight: 2, fillOpacity: .12 }).addTo(m);
     pings.forEach(p => L.circleMarker([p.lat, p.lng], { radius: 4, color: p.inside ? "#17803d" : "#b45309", fillOpacity: 1 }).addTo(m).bindTooltip(fmtTime(p.at)));
     m.fitBounds([[c.lat, c.lng], ...pings.map(p => [p.lat, p.lng])], { padding: [30, 30], maxZoom: 18 });
@@ -522,7 +522,7 @@ async function renderCounters(){
   };
   if (hasMap()) {
     cmap = L.map("cmap");
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(cmap);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(cmap);
     counters.filter(c => c.id !== editing).forEach(c => L.circle([c.lat, c.lng], { radius: c.radius_m, color: "#5a6b6c", weight: 1, fillOpacity: .08 }).addTo(cmap).bindTooltip(esc(c.name)));
     if (e) place(e.lat, e.lng, true);
     else if (counters.length) cmap.fitBounds(counters.map(c => [c.lat, c.lng]), { padding: [40, 40], maxZoom: 18 });
