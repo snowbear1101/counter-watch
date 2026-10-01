@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://*.tile.openstreetmap.org https://tile.openstreetmap.org https://cdnjs.cloudflare.com; connect-src 'self' https://*.supabase.co; base-uri 'none'; form-action 'self'">
+<meta name="referrer" content="same-origin">
+<title>Counter Watch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@600;700;800&family=Atkinson+Hyperlegible:wght@400;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="config.js"></script>
+<style>
+/* Layout: a control room. Admin lands on the live board (status of every counter first, map second);
+   agents land on a single check-in card sized for a phone. */
+:root{
+  --bg:#f2f4f5; --surface:#ffffff; --fg:#14201f; --muted:#5a6b6c; --line:#d9e0e1;
+  --accent:#0f5c6e; --accent-ink:#ffffff; --accent-soft:#dcecef;
+  --ok:#17803d; --ok-bg:#e0f4e6; --warn:#b45309; --warn-bg:#fdf0dc; --bad:#c0322b; --bad-bg:#fbe5e3; --off:#6b7678; --off-bg:#eceff0;
+  --display:"Schibsted Grotesk","Helvetica Neue",Arial,sans-serif;
+  --body:"Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0d1415; --surface:#152022; --fg:#e4ecec; --muted:#93a5a6; --line:#26363a;
+  --accent:#5cc3d6; --accent-ink:#06181c; --accent-soft:#163238;
+  --ok:#5fd68b; --ok-bg:#133222; --warn:#f3b35a; --warn-bg:#3a2a12; --bad:#ff8177; --bad-bg:#3b1a18; --off:#a2aeb0; --off-bg:#222d30; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0d1415; --surface:#152022; --fg:#e4ecec; --muted:#93a5a6; --line:#26363a;
+  --accent:#5cc3d6; --accent-ink:#06181c; --accent-soft:#163238;
+  --ok:#5fd68b; --ok-bg:#133222; --warn:#f3b35a; --warn-bg:#3a2a12; --bad:#ff8177; --bad-bg:#3b1a18; --off:#a2aeb0; --off-bg:#222d30; color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 var(--body)}
+h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
+a{color:var(--accent)}
+button{font:700 .9rem var(--body);border-radius:8px;padding:8px 14px;cursor:pointer;border:1px solid var(--line);background:var(--surface);color:var(--fg)}
+button:hover{border-color:var(--muted)}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+button.big{font-size:1.05rem;padding:14px 18px;width:100%}
+button.ghost{border-color:transparent;background:none}
+button.danger{color:var(--bad)}
+button.sm{padding:4px 10px;font-size:.8rem}
+button:disabled{opacity:.5;cursor:default}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input,select{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--fg);min-width:0}
+label{font-size:.85rem;font-weight:700;color:var(--muted)}
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.err{color:var(--bad);margin:0;font-size:.9rem}
+.small{font-size:.85rem;color:var(--muted)}
+.mono{font-family:var(--mono);font-size:.85rem;font-variant-numeric:tabular-nums}
+
+/* auth */
+.auth{min-height:100vh;display:grid;place-items:center;padding:24px 16px}
+.authcard{width:min(400px,100%);background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px;display:flex;flex-direction:column;gap:14px}
+.authcard h1{font-size:1.6rem}
+
+/* shell */
+.top{background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:env(safe-area-inset-top,0px);z-index:1000}
+.topin{max-width:1200px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.brand{font:800 1.1rem var(--display);letter-spacing:-.01em;margin-right:auto}
+nav{display:flex;gap:4px;flex-wrap:wrap}
+nav button{border:0;background:none;color:var(--muted);padding:8px 12px}
+nav button[aria-current="page"]{background:var(--accent-soft);color:var(--accent)}
+.who{display:flex;gap:8px;align-items:center;font-size:.9rem}
+main{max-width:1200px;margin:0 auto;padding:22px 16px 60px;display:flex;flex-direction:column;gap:18px}
+.vhead{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.vhead h1{font-size:1.6rem}
+.section{display:flex;flex-direction:column;gap:10px}
+.section h2{font-size:1.15rem}
+.box{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:560px){.grid2{grid-template-columns:1fr}}
+.full{grid-column:1/-1}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.notice{border-radius:10px;padding:12px 14px;font-size:.92rem}
+.notice.warn{background:var(--warn-bg);color:var(--warn)}
+.notice.bad{background:var(--bad-bg);color:var(--bad)}
+.notice b{color:inherit}
+
+/* status pills and stats */
+.pill{display:inline-block;font-size:.78rem;font-weight:700;padding:2px 10px;border-radius:999px;white-space:nowrap}
+.s-staffed,.p-present{background:var(--ok-bg);color:var(--ok)}
+.s-check,.p-away{background:var(--warn-bg);color:var(--warn)}
+.p-no_signal{background:var(--warn-bg);color:var(--warn)}
+.s-unmanned{background:var(--bad-bg);color:var(--bad)}
+.p-ended{background:var(--off-bg);color:var(--off)}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+@media (max-width:760px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:2px}
+.stat b{font:800 1.9rem/1 var(--display);font-variant-numeric:tabular-nums}
+.stat span{color:var(--muted);font-size:.85rem}
+.stat.ok b{color:var(--ok)} .stat.warn b{color:var(--warn)} .stat.bad b{color:var(--bad)}
+
+/* live board */
+.board{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+.ccard{background:var(--surface);border:1px solid var(--line);border-left:5px solid var(--off);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.ccard.staffed{border-left-color:var(--ok)} .ccard.check{border-left-color:var(--warn)} .ccard.unmanned{border-left-color:var(--bad)}
+.ccard h3{font-size:1.05rem}
+.chead{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.agent{border-top:1px solid var(--line);padding-top:8px;display:flex;flex-direction:column;gap:2px}
+.agent .row{justify-content:space-between}
+.live{display:flex;gap:8px;align-items:center;font-size:.85rem;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+.live.down .dot{background:var(--bad)}
+#map,#cmap,#pmap{height:420px;border-radius:12px;border:1px solid var(--line);z-index:0}
+#cmap{height:300px} #pmap{height:260px}
+.nomap{padding:20px;text-align:center}
+
+/* agent check-in */
+.desk{max-width:520px;width:100%;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.here{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:12px}
+.here.on{border-color:var(--ok);box-shadow:inset 0 4px 0 var(--ok)}
+.here.away{border-color:var(--warn);box-shadow:inset 0 4px 0 var(--warn)}
+.here h2{font-size:1.5rem}
+.clock{font:800 2.2rem/1 var(--display);font-variant-numeric:tabular-nums}
+.pick{display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.pickrow{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 14px;border-top:1px solid var(--line)}
+.pickrow:first-child{border-top:0}
+
+/* tables */
+.tbox{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:640px}
+th{font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);text-align:left;padding:10px 14px;border-bottom:1px solid var(--line)}
+td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.num{font-variant-numeric:tabular-nums;font-weight:700}
+.alert{color:var(--bad)}
+tr.click{cursor:pointer} tr.click:hover td{background:var(--bg)}
+
+dialog{border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--fg);padding:0;width:min(720px,calc(100vw - 32px));max-height:calc(100vh - 32px)}
+dialog::backdrop{background:rgba(8,16,18,.55)}
+.dlg{padding:20px;display:flex;flex-direction:column;gap:14px}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:8px;font-weight:700;z-index:2000;max-width:calc(100vw - 32px)}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="toast" id="toast" role="status" hidden></div>
+<dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const hasMap = () => typeof L !== "undefined";
+const PRESENCE = { present: "At counter", away: "Away from counter", no_signal: "No signal", ended: "Checked out" };
+const STATUS = { staffed: "Staffed", check: "Check", unmanned: "Unmanned" };
+const ENDED = { agent: "Agent checked out", admin: "Admin checked out", no_signal: "No signal" };
+
+let me = null, cfg = {}, shift = null, view = "";
+let counters = [], users = [];
+
+// All data goes through the cw_* database functions in Supabase (see schema.sql).
+const CFG = window.CW_CONFIG || {};
+const TOKEN_KEY = "cw_token";
+let token = null;
+try { token = localStorage.getItem(TOKEN_KEY) } catch {}
+function saveToken(t){ token = t; try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY) } catch {} }
+const pk = o => Object.fromEntries(Object.entries(o).map(([k, v]) => ["p_" + k, v]));
+async function rpc(fn, args = {}, { auth = true } = {}){
+  let r;
+  try {
+    r = await fetch(`${CFG.supabaseUrl.replace(/\/$/, "")}/rest/v1/rpc/${fn}`, { method: "POST",
+      headers: { "Content-Type": "application/json", apikey: CFG.supabaseKey, Authorization: "Bearer " + CFG.supabaseKey },
+      body: JSON.stringify(auth ? { p_token: token, ...args } : args) });
+  } catch { throw new Error("Can't reach the database. Check your internet connection.") }
+  const d = await r.json().catch(() => ({}));
+  if (d && d.code === "PT401") { stopAll(); saveToken(null); me = null; renderAuth(false); throw new Error(d.message || "Please sign in.") }
+  if (!r.ok) throw new Error((d && d.message) || "Something went wrong.");
+  if (d && d.error) throw new Error(d.error);
+  return d;
+}
+function toast(m){ const t = $("#toast"); t.textContent = m; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => t.hidden = true, 3200) }
+
+// ---------- time ----------
+const parseTs = s => new Date(s);
+const fmtTime = s => parseTs(s).toLocaleTimeString("en-SG", { hour: "numeric", minute: "2-digit" });
+const fmtDT = s => parseTs(s).toLocaleString("en-SG", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+function dur(ms){
+  const m = Math.max(0, Math.floor(ms / 60000)), h = Math.floor(m / 60);
+  return h ? `${h} h ${String(m % 60).padStart(2, "0")} min` : `${m} min`;
+}
+function agoText(s){
+  const sec = Math.max(0, Math.round((Date.now() - parseTs(s)) / 1000));
+  return sec < 60 ? `${sec} s ago` : sec < 3600 ? `${Math.floor(sec / 60)} min ago` : dur(sec * 1000) + " ago";
+}
+const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+const toUtc = d => d.toISOString().slice(0, 19) + "Z";
+
+// ---------- location ----------
+function distanceM(lat1, lng1, lat2, lng2){
+  const r = x => x * Math.PI / 180, dp = r(lat2 - lat1), dl = r(lng2 - lng1);
+  const a = Math.sin(dp / 2) ** 2 + Math.cos(r(lat1)) * Math.cos(r(lat2)) * Math.sin(dl / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(a));
+}
+const insideCounter = (dist, acc, radius) => dist - Math.min(acc, cfg.accuracy_allowance_m) <= radius;
+function getFix(){
+  return new Promise((resolve, reject) => {
+    if (!window.isSecureContext) return reject(new Error("This page isn't on HTTPS, so the browser won't share your location. Ask your admin for the https:// address."));
+    if (!navigator.geolocation) return reject(new Error("This browser can't share its location."));
+    navigator.geolocation.getCurrentPosition(
+      p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }),
+      e => reject(new Error(e.code === 1 ? "Location access is blocked. Allow location for this site in your browser settings, then try again."
+        : e.code === 3 ? "Finding your location took too long. Try again, ideally near a window." : "Your location isn't available right now. Turn on Location / GPS and try again.")),
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+  });
+}
+
+// ---------- background work: heartbeat (agent) and board refresh (admin) ----------
+let pingTimer = null, boardTimer = null, tickTimer = null, wakeLock = null, lastPingErr = "";
+function stopAll(){ clearInterval(pingTimer); clearInterval(boardTimer); clearInterval(tickTimer); pingTimer = boardTimer = tickTimer = null; releaseWake() }
+async function keepAwake(){
+  try { if ("wakeLock" in navigator && !wakeLock && document.visibilityState === "visible") { wakeLock = await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release", () => { wakeLock = null; if (view === "desk") renderDesk() }) } } catch {}
+}
+function releaseWake(){ try { wakeLock?.release() } catch {} wakeLock = null }
+function startHeartbeat(){
+  if (pingTimer) return;
+  pingTimer = setInterval(sendPing, cfg.ping_every_sec * 1000);
+  keepAwake();
+}
+function stopHeartbeat(){ clearInterval(pingTimer); pingTimer = null; releaseWake() }
+async function sendPing(){
+  if (!shift) return stopHeartbeat();
+  try {
+    const fix = await getFix();
+    const d = await rpc("cw_ping", pk(fix));
+    lastPingErr = "";
+    if (!d.shift) { shift = null; nearby = null; stopHeartbeat(); toast("You've been checked out.") }
+    else shift = d.shift;
+  } catch (err) { lastPingErr = err.message }
+  if (view === "desk") renderDesk();
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || !me) return;
+  if (shift) { sendPing(); keepAwake() }
+  if (view === "live") refreshBoard();
+});
+
+// ---------- auth ----------
+async function boot(){
+  try {
+    if (!CFG.supabaseUrl || !CFG.supabaseKey) {
+      $("#app").innerHTML = `<div class="auth"><div class="authcard"><h1>Counter Watch</h1><p class="err" style="margin:0">This copy isn't connected to a database yet.</p><p class="small" style="margin:0">Put your Supabase project URL and anon key in <span class="mono">config.js</span>. See README.md.</p></div></div>`;
+      return;
+    }
+    const d = await rpc("cw_me");
+    if (d.user) signedIn(d); else { saveToken(null); renderAuth(d.setup, d.setup_code) }
+  } catch (e) { $("#app").innerHTML = `<div class="auth"><p class="err">${esc(e.message)} Then reload this page.</p></div>` }
+}
+function signedIn(d){
+  me = d.user; cfg = d.config; shift = d.shift;
+  view = me.is_admin && !shift ? "live" : "desk";
+  if (shift) startHeartbeat();
+  renderShell();
+}
+function renderAuth(setup, needCode){
+  $("#app").innerHTML = `<div class="auth"><form class="authcard" id="authForm">
+    <h1>Counter Watch</h1>
+    <p class="small" style="margin:0">${setup ? "No one has signed up yet. Create the admin account; you'll add counters and agents after this." : "Sign in with the username and password your admin gave you."}</p>
+    ${setup && needCode ? `<div class="field"><label for="a-code">Setup code</label><input id="a-code" required autocomplete="off" autocapitalize="none" spellcheck="false"><span class="small">Shown at the end of setting up the database (in Supabase, run <span class="mono">select setup_code from cw_settings;</span>).</span></div>` : ""}
+    ${setup ? `<div class="field"><label for="a-name">Your name</label><input id="a-name" required autocomplete="name"></div>` : ""}
+    <div class="field"><label for="a-user">Username</label><input id="a-user" required autocomplete="username" autocapitalize="none" spellcheck="false"></div>
+    <div class="field"><label for="a-pw">Password${setup ? " (8+ characters)" : ""}</label><input id="a-pw" type="password" required autocomplete="${setup ? "new-password" : "current-password"}"></div>
+    <p class="err" id="a-err" hidden></p>
+    <button class="primary" type="submit">${setup ? "Create admin account" : "Sign in"}</button>
+  </form></div>`;
+  $("#authForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    try {
+      const body = { username: $("#a-user").value, password: $("#a-pw").value };
+      if (setup) { body.name = $("#a-name").value; body.setup_code = $("#a-code")?.value || "" }
+      const d = await rpc(setup ? "cw_setup" : "cw_login", pk(body), { auth: false });
+      saveToken(d.token); signedIn(d);
+    } catch (err) { const el = $("#a-err"); el.textContent = err.message; el.hidden = false }
+  });
+}
+
+// ---------- shell ----------
+function renderShell(){
+  clearInterval(boardTimer); clearInterval(tickTimer); boardTimer = tickTimer = null;
+  const tabs = me.is_admin
+    ? [["live", "Live board"], ["log", "Log"], ["counters", "Counters"], ["team", "Team"], ["desk", "My check-in"], ["account", "My account"]]
+    : [["desk", "Check in"], ["account", "My account"]];
+  $("#app").innerHTML = `<header class="top"><div class="topin">
+      <span class="brand">Counter Watch</span>
+      <nav>${tabs.map(([k, l]) => `<button type="button" data-view="${k}" ${view === k ? 'aria-current="page"' : ""}>${l}</button>`).join("")}</nav>
+      <span class="who">${esc(me.name)}<button type="button" class="ghost" id="logout">Sign out</button></span>
+    </div></header><main id="main"></main>`;
+  $("#logout").onclick = async () => {
+    if (shift && !confirm("You're still checked in. Signing out stops your location checks, and your counter will show “No signal”. Sign out anyway?")) return;
+    stopAll(); await rpc("cw_logout").catch(() => {}); saveToken(null); me = null; shift = null; renderAuth(false);
+  };
+  document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { view = b.dataset.view; renderShell() });
+  document.title = "Counter Watch";
+  ({ live: renderLive, log: renderLog, counters: renderCounters, team: renderTeam, desk: renderDesk, account: renderAccount })[view]();
+}
+
+// ---------- agent: check in ----------
+let nearby = null, locating = false, locErr = "";
+async function locate(){
+  locating = true; locErr = ""; renderDesk();
+  try {
+    const [fix, c] = await Promise.all([getFix(), rpc("cw_list_counters")]);
+    counters = c.counters.filter(x => x.active);
+    nearby = { fix, list: counters.map(x => ({ ...x, dist: distanceM(fix.lat, fix.lng, x.lat, x.lng) })).sort((a, b) => a.dist - b.dist) };
+  } catch (err) { locErr = err.message }
+  locating = false; renderDesk();
+}
+function renderDesk(){
+  const main = $("#main"); if (!main || view !== "desk") return;
+  clearInterval(tickTimer); tickTimer = null;
+  const insecure = !window.isSecureContext ? `<div class="notice bad"><b>Location won't work on this address.</b> Browsers only share location with HTTPS pages (or localhost). Ask your admin for the <span class="mono">https://</span> link.</div>` : "";
+  if (shift) {
+    const p = shift.presence, cls = p === "present" ? "on" : "away";
+    const where = shift.last_dist == null ? "" : `${Math.round(shift.last_dist)} m from the counter (±${Math.round(shift.last_acc)} m)`;
+    main.innerHTML = `<div class="desk">${insecure}
+      <div class="here ${cls}">
+        <div class="row" style="justify-content:space-between"><span class="small">You're checked in at</span><span class="pill p-${p}">${PRESENCE[p]}</span></div>
+        <h2>${esc(shift.counter_name)}</h2>
+        <div><div class="clock" id="clock">${dur(Date.now() - parseTs(shift.start_at))}</div><div class="small">since ${fmtTime(shift.start_at)}</div></div>
+        <div class="small" id="seen">Location confirmed ${agoText(shift.last_seen_at)}${where ? " · " + where : ""}</div>
+        ${p === "away" ? `<div class="notice warn">Your last location was outside this counter's ${shift.radius_m} m area, so the board shows you as away. Head back to the counter; it updates within a minute.</div>` : ""}
+        ${lastPingErr ? `<div class="notice bad">${esc(lastPingErr)}</div>` : ""}
+        <div class="small">Keep this page open while you're on duty. It confirms your location every minute.
+          ${wakeLock ? "The screen is being kept on." : "If the screen locks, location checks pause and your counter shows “No signal” after " + Math.round(cfg.stale_sec / 60) + " minutes. After " + cfg.auto_checkout_min + " minutes you're checked out automatically."}</div>
+        <div class="row"><button type="button" id="pingNow">Confirm location now</button><button type="button" class="danger" id="checkout">Check out</button></div>
+      </div></div>`;
+    $("#pingNow").onclick = async e => { e.target.disabled = true; e.target.textContent = "Checking…"; await sendPing() };
+    $("#checkout").onclick = async e => {
+      const b = e.target;
+      if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Tap again to check out"; return }
+      try { await rpc("cw_checkout"); shift = null; stopHeartbeat(); nearby = null; toast("Checked out"); renderDesk(); locate() } catch (err) { toast(err.message) }
+    };
+    tickTimer = setInterval(() => {
+      if (!$("#clock")) return;
+      $("#clock").textContent = dur(Date.now() - parseTs(shift.start_at));
+      $("#seen").textContent = `Location confirmed ${agoText(shift.last_seen_at)}${where ? " · " + where : ""}`;
+    }, 5000);
+    return;
+  }
+  if (!nearby && !locating && !locErr) { locate(); return }
+  const fix = nearby?.fix;
+  main.innerHTML = `<div class="desk">${insecure}
+    <div class="vhead"><div><h1>Check in</h1><p class="small" style="margin:2px 0 0">Stand at your counter, then check in. You need to be within the counter's area.</p></div></div>
+    ${locating ? `<div class="box"><b>Finding your location…</b><span class="small">If your browser asks, allow location access.</span></div>` : ""}
+    ${locErr ? `<div class="notice bad">${esc(locErr)}</div>` : ""}
+    ${fix ? `<p class="small" style="margin:0">Your location is accurate to about <b>±${Math.round(fix.acc)} m</b>.
+       ${fix.acc > cfg.max_accuracy_m ? `<span class="alert">That's too vague to check in (needs ±${cfg.max_accuracy_m} m or better). Turn on precise location / GPS and refresh.</span>` : ""}</p>
+      ${nearby.list.length ? `<div class="pick">${nearby.list.map(c => {
+        const ok = insideCounter(c.dist, fix.acc, c.radius_m) && fix.acc <= cfg.max_accuracy_m;
+        return `<div class="pickrow"><div><b>${esc(c.name)}</b><div class="small">${c.dist < 1000 ? Math.round(c.dist) + " m" : (c.dist / 1000).toFixed(1) + " km"} away · must be within ${c.radius_m} m</div></div>
+          <button type="button" class="${ok ? "primary" : ""}" data-checkin="${c.id}" ${ok ? "" : "disabled"}>${ok ? "Check in" : "Too far"}</button></div>`;
+      }).join("")}</div>` : `<div class="box"><span class="small">No counters have been set up yet. Ask your admin to add them.</span></div>`}` : ""}
+    <button type="button" id="relocate" ${locating ? "disabled" : ""}>${fix || locErr ? "Refresh my location" : "Find my location"}</button>
+  </div>`;
+  $("#relocate").onclick = locate;
+  document.querySelectorAll("[data-checkin]").forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = "Checking in…";
+    try {
+      const fresh = await getFix();
+      shift = (await rpc("cw_checkin", { p_counter_id: Number(b.dataset.checkin), ...pk(fresh), p_device: navigator.userAgent.slice(0, 200) })).shift;
+      lastPingErr = ""; startHeartbeat(); toast(`Checked in at ${shift.counter_name}`); renderDesk();
+    } catch (err) { toast(err.message); locate() }
+  });
+}
+
+// ---------- admin: live board ----------
+let board = null, boardMap = null, boardLayer = null, boardFitted = false, boardDown = false, boardAt = null;
+async function refreshBoard(){
+  try { board = await rpc("cw_status"); boardDown = false; boardAt = new Date() } catch { boardDown = true }
+  if (view === "live") drawBoard();
+}
+function renderLive(){
+  $("#main").innerHTML = `<div class="vhead"><div><h1>Live board</h1><p class="small" style="margin:2px 0 0">Updates every 10 seconds. A counter is staffed when an agent's location was confirmed inside it in the last ${Math.round(cfg.stale_sec / 60)} minutes.</p></div>
+      <div class="live" id="liveState"><span class="dot"></span><span>Loading…</span></div></div>
+    <div id="boardBody"><p class="small">Loading…</p></div>
+    <section class="section"><h2>Map</h2>${hasMap() ? `<div id="map"></div>` : `<div class="box nomap small">The map needs an internet connection to load. The board above still works.</div>`}</section>`;
+  boardMap = null; boardFitted = false;
+  if (hasMap()) {
+    boardMap = L.map("map", { scrollWheelZoom: false });
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(boardMap);
+    boardMap.setView([1.3521, 103.8198], 11);
+    boardLayer = L.layerGroup().addTo(boardMap);
+  }
+  if (board) drawBoard();
+  refreshBoard();
+  boardTimer = setInterval(refreshBoard, 10000);
+  tickTimer = setInterval(() => { if (board && view === "live") drawBoard(true) }, 5000);
+}
+function drawBoard(textOnly){
+  const st = $("#liveState"); if (!st || !board) return;
+  st.className = "live" + (boardDown ? " down" : "");
+  st.innerHTML = `<span class="dot"></span><span>${boardDown ? "Can't reach the server. Showing the last known state." : "Live · updated " + boardAt.toLocaleTimeString("en-SG")}</span>`;
+  const cs = board.counters, order = { unmanned: 0, check: 1, staffed: 2 };
+  const n = k => cs.filter(c => c.status === k).length;
+  const agents = cs.reduce((a, c) => a + c.shifts.length, 0);
+  document.title = n("unmanned") ? `(${n("unmanned")} unmanned) Counter Watch` : "Counter Watch";
+  const sorted = [...cs].sort((a, b) => order[a.status] - order[b.status] || a.name.localeCompare(b.name));
+  $("#boardBody").innerHTML = `
+    <div class="stats" style="margin-bottom:14px">
+      <div class="stat bad"><b>${n("unmanned")}</b><span>Unmanned</span></div>
+      <div class="stat warn"><b>${n("check")}</b><span>Need checking</span></div>
+      <div class="stat ok"><b>${n("staffed")}</b><span>Staffed</span></div>
+      <div class="stat"><b>${agents}</b><span>Agents checked in</span></div>
+    </div>
+    ${cs.length ? `<div class="board">${sorted.map(c => `<div class="ccard ${c.status}">
+      <div class="chead"><h3>${esc(c.name)}</h3><span class="pill s-${c.status}">${STATUS[c.status]}</span></div>
+      ${c.status === "unmanned" ? `<div class="small">${c.unmanned_since ? `Nobody here for <b class="alert">${dur(Date.now() - parseTs(c.unmanned_since))}</b> · last agent left ${fmtDT(c.unmanned_since)}` : "Nobody has checked in here yet."}</div>` : ""}
+      ${c.shifts.map(s => `<div class="agent">
+        <div class="row"><b>${esc(s.user_name)}</b><span class="pill p-${s.presence}">${PRESENCE[s.presence]}</span></div>
+        <div class="small">In since ${fmtTime(s.start_at)} (${dur(Date.now() - parseTs(s.start_at))}) · seen ${agoText(s.last_seen_at)}${s.last_dist != null ? ` · ${Math.round(s.last_dist)} m away` : ""}</div>
+        <div><button type="button" class="sm danger" data-end="${s.id}" data-name="${esc(s.user_name)}">Check out</button></div>
+      </div>`).join("")}
+    </div>`).join("")}</div>` : `<div class="box"><span class="small">No counters yet. Add them on the <a href="#" id="goCounters">Counters</a> page.</span></div>`}`;
+  $("#goCounters")?.addEventListener("click", e => { e.preventDefault(); view = "counters"; renderShell() });
+  document.querySelectorAll("[data-end]").forEach(b => b.onclick = async () => {
+    if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = `Confirm: check out ${b.dataset.name}`; clearInterval(tickTimer); return }
+    try { await rpc("cw_end_shift", { p_shift_id: Number(b.dataset.end) }); toast(`${b.dataset.name} checked out`); refreshBoard() } catch (err) { toast(err.message) }
+    tickTimer = setInterval(() => { if (board && view === "live") drawBoard(true) }, 5000);
+  });
+  if (textOnly || !boardMap) return;
+  const color = { staffed: "#17803d", check: "#b45309", unmanned: "#c0322b" };
+  boardLayer.clearLayers();
+  const pts = [];
+  cs.forEach(c => {
+    pts.push([c.lat, c.lng]);
+    L.circle([c.lat, c.lng], { radius: c.radius_m, color: color[c.status], weight: 2, fillOpacity: .15 }).addTo(boardLayer)
+      .bindTooltip(`${esc(c.name)} · ${STATUS[c.status]}`, { permanent: cs.length <= 12, direction: "top" });
+    c.shifts.forEach(s => { if (s.last_lat != null) L.circleMarker([s.last_lat, s.last_lng], { radius: 5, color: "#1f63c7", fillOpacity: 1 }).addTo(boardLayer).bindTooltip(`${esc(s.user_name)} · ${agoText(s.last_seen_at)}`) });
+  });
+  if (pts.length && !boardFitted) { boardMap.fitBounds(pts, { padding: [40, 40], maxZoom: 18 }); boardFitted = true }
+}
+
+// ---------- admin: log ----------
+let logDay = ymd(new Date()), logShifts = [];
+async function renderLog(){
+  $("#main").innerHTML = `<div class="vhead"><div><h1>Log</h1><p class="small" style="margin:2px 0 0">Every check-in for the day, with how it ended and how often the agent's location was outside the counter.</p></div>
+      <div class="row"><input type="date" id="logDay" value="${logDay}" aria-label="Day"><button type="button" id="csv">Download CSV</button></div></div>
+    <div id="logBody"><p class="small">Loading…</p></div>`;
+  $("#logDay").onchange = e => { logDay = e.target.value || ymd(new Date()); renderLog() };
+  $("#csv").onclick = downloadCsv;
+  const start = new Date(logDay + "T00:00:00"), end = new Date(start); end.setDate(end.getDate() + 1);
+  try { logShifts = (await rpc("cw_list_shifts", { p_since: toUtc(start), p_until: toUtc(end) })).shifts }
+  catch (err) { $("#logBody").innerHTML = `<p class="err">${esc(err.message)}</p>`; return }
+  $("#logBody").innerHTML = logShifts.length ? `<div class="tbox"><table><thead><tr><th>Agent</th><th>Counter</th><th>Checked in</th><th>Checked out</th><th>Time</th><th>How it ended</th><th>Location checks</th></tr></thead><tbody>
+    ${logShifts.map(s => `<tr class="click" data-shift="${s.id}" tabindex="0">
+      <td><b>${esc(s.user_name)}</b></td><td>${esc(s.counter_name)}</td>
+      <td class="mono">${fmtDT(s.start_at)}</td><td class="mono">${s.end_at ? fmtDT(s.end_at) : '<span class="pill p-' + s.presence + '">' + PRESENCE[s.presence] + "</span>"}</td>
+      <td class="mono">${dur((s.end_at ? parseTs(s.end_at) : Date.now()) - parseTs(s.start_at))}</td>
+      <td>${s.end_reason ? esc(ENDED[s.end_reason]) + (s.ended_by_name ? ` <span class="small">(${esc(s.ended_by_name)})</span>` : "") : '<span class="small">Still checked in</span>'}</td>
+      <td>${s.pings}${s.pings_outside ? ` <span class="alert">· ${s.pings_outside} outside</span>` : ""}</td></tr>`).join("")}
+    </tbody></table></div><p class="small">Click a row to see each location check on a map.</p>`
+    : `<div class="box"><span class="small">No one checked in on this day.</span></div>`;
+  document.querySelectorAll("[data-shift]").forEach(r => { r.onclick = () => openShift(Number(r.dataset.shift)); r.onkeydown = e => { if (e.key === "Enter") r.onclick() } });
+}
+function downloadCsv(){
+  const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const rows = [["Agent", "Counter", "Checked in", "Checked out", "Minutes", "How it ended", "Location checks", "Checks outside", "Check-in distance (m)", "Check-in accuracy (m)"]]
+    .concat(logShifts.map(s => [s.user_name, s.counter_name, parseTs(s.start_at).toLocaleString("en-SG"), s.end_at ? parseTs(s.end_at).toLocaleString("en-SG") : "",
+      Math.round(((s.end_at ? parseTs(s.end_at) : Date.now()) - parseTs(s.start_at)) / 60000), s.end_reason ? ENDED[s.end_reason] : "Still checked in",
+      s.pings, s.pings_outside, Math.round(s.start_dist), Math.round(s.start_acc)]));
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([rows.map(r => r.map(q).join(",")).join("\n")], { type: "text/csv" }));
+  a.download = `counter-log-${logDay}.csv`; a.click(); URL.revokeObjectURL(a.href);
+}
+async function openShift(id){
+  const s = logShifts.find(x => x.id === id);
+  let pings;
+  try { pings = (await rpc("cw_list_pings", { p_shift_id: id })).pings } catch (err) { return toast(err.message) }
+  const c = counters.find(x => x.id === s.counter_id) || (await rpc("cw_list_counters")).counters.find(x => x.id === s.counter_id);
+  $("#dlgBody").innerHTML = `<div class="row" style="justify-content:space-between"><h2>${esc(s.user_name)} at ${esc(s.counter_name)}</h2><button type="button" id="dlgClose">Close</button></div>
+    <p class="small" style="margin:0">${fmtDT(s.start_at)} – ${s.end_at ? fmtDT(s.end_at) : "now"} · ${s.end_reason ? esc(ENDED[s.end_reason]) : "still checked in"} · device: ${esc(s.device.slice(0, 90))}</p>
+    ${hasMap() ? `<div id="pmap"></div>` : ""}
+    <div class="tbox" style="max-height:280px;overflow:auto"><table style="min-width:420px"><thead><tr><th>Time</th><th>Distance</th><th>Accuracy</th><th></th></tr></thead><tbody>
+      ${pings.map(p => `<tr><td class="mono">${fmtTime(p.at)}</td><td class="mono">${Math.round(p.dist)} m</td><td class="mono">±${Math.round(p.acc)} m</td><td>${p.inside ? '<span class="pill p-present">Inside</span>' : '<span class="pill p-away">Outside</span>'}</td></tr>`).join("")}
+    </tbody></table></div>`;
+  $("#dlg").showModal();
+  $("#dlgClose").onclick = () => $("#dlg").close();
+  if (hasMap() && c) {
+    const m = L.map("pmap");
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(m);
+    L.circle([c.lat, c.lng], { radius: c.radius_m, color: "#0f5c6e", weight: 2, fillOpacity: .12 }).addTo(m);
+    pings.forEach(p => L.circleMarker([p.lat, p.lng], { radius: 4, color: p.inside ? "#17803d" : "#b45309", fillOpacity: 1 }).addTo(m).bindTooltip(fmtTime(p.at)));
+    m.fitBounds([[c.lat, c.lng], ...pings.map(p => [p.lat, p.lng])], { padding: [30, 30], maxZoom: 18 });
+  }
+}
+
+// ---------- admin: counters ----------
+let editing = null;
+async function renderCounters(){
+  try { counters = (await rpc("cw_list_counters")).counters } catch (err) { return toast(err.message) }
+  const e = editing ? counters.find(c => c.id === editing) : null;
+  $("#main").innerHTML = `<div class="vhead"><div><h1>Counters</h1><p class="small" style="margin:2px 0 0">Set each counter's spot and how close an agent must be to check in there.</p></div></div>
+    <form class="box" id="cForm">
+      <b>${e ? "Edit " + esc(e.name) : "Add a counter"}</b>
+      <div class="grid2">
+        <div class="field full"><label for="c-name">Name</label><input id="c-name" required maxlength="80" value="${esc(e?.name || "")}" placeholder="e.g. Counter 3, Level 1 lobby"></div>
+        <div class="field"><label for="c-lat">Latitude</label><input id="c-lat" inputmode="decimal" required value="${e?.lat ?? ""}"></div>
+        <div class="field"><label for="c-lng">Longitude</label><input id="c-lng" inputmode="decimal" required value="${e?.lng ?? ""}"></div>
+        <div class="field"><label for="c-rad">Check-in radius (metres)</label><input id="c-rad" type="number" min="10" max="1000" required value="${e?.radius_m ?? cfg.default_radius_m}"></div>
+        <div class="field" style="justify-content:flex-end"><button type="button" id="useHere">Use my current location</button></div>
+      </div>
+      ${hasMap() ? `<div id="cmap"></div><p class="small" style="margin:0">Click the map to place the counter. Indoors, phone locations are often off by 10–50 m, so a radius of 30–80 m works best.</p>` : ""}
+      <p class="err" id="c-err" hidden></p>
+      <div class="row"><button class="primary" type="submit">${e ? "Save changes" : "Add counter"}</button>${e ? `<button type="button" id="cCancel">Cancel</button>` : ""}</div>
+    </form>
+    <div class="tbox"><table><thead><tr><th>Counter</th><th>Location</th><th>Radius</th><th></th></tr></thead><tbody>
+      ${counters.map(c => `<tr><td><b>${esc(c.name)}</b>${c.active ? "" : ' <span class="small">(off)</span>'}</td><td class="mono">${c.lat.toFixed(6)}, ${c.lng.toFixed(6)}</td><td class="mono">${c.radius_m} m</td>
+        <td style="white-space:nowrap"><button type="button" class="sm" data-edit="${c.id}">Edit</button> <button type="button" class="sm ${c.active ? "danger" : ""}" data-toggle="${c.id}">${c.active ? "Turn off" : "Turn on"}</button></td></tr>`).join("") || `<tr><td colspan="4" class="small">No counters yet.</td></tr>`}
+    </tbody></table></div>
+    <p class="small">Turned-off counters disappear from the board and can't be checked into. Their history stays.</p>`;
+  let pin = null, ring = null, cmap = null;
+  const place = (lat, lng, pan) => {
+    $("#c-lat").value = lat.toFixed(6); $("#c-lng").value = lng.toFixed(6);
+    if (!cmap) return;
+    const r = Number($("#c-rad").value) || cfg.default_radius_m;
+    if (!pin) { pin = L.marker([lat, lng]).addTo(cmap); ring = L.circle([lat, lng], { radius: r, color: "#0f5c6e", fillOpacity: .15 }).addTo(cmap) }
+    else { pin.setLatLng([lat, lng]); ring.setLatLng([lat, lng]); ring.setRadius(r) }
+    if (pan) cmap.setView([lat, lng], 18);
+  };
+  if (hasMap()) {
+    cmap = L.map("cmap");
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(cmap);
+    counters.filter(c => c.id !== editing).forEach(c => L.circle([c.lat, c.lng], { radius: c.radius_m, color: "#5a6b6c", weight: 1, fillOpacity: .08 }).addTo(cmap).bindTooltip(esc(c.name)));
+    if (e) place(e.lat, e.lng, true);
+    else if (counters.length) cmap.fitBounds(counters.map(c => [c.lat, c.lng]), { padding: [40, 40], maxZoom: 18 });
+    else cmap.setView([1.3521, 103.8198], 11);
+    cmap.on("click", ev => place(ev.latlng.lat, ev.latlng.lng));
+    $("#c-rad").oninput = () => ring?.setRadius(Number($("#c-rad").value) || 10);
+  }
+  $("#useHere").onclick = async ev => {
+    const b = ev.target; b.disabled = true; b.textContent = "Finding you…";
+    try { const f = await getFix(); place(f.lat, f.lng, true); toast(`Location set (accurate to ±${Math.round(f.acc)} m)`) } catch (err) { toast(err.message) }
+    b.disabled = false; b.textContent = "Use my current location";
+  };
+  $("#cCancel")?.addEventListener("click", () => { editing = null; renderCounters() });
+  $("#cForm").onsubmit = async ev => {
+    ev.preventDefault();
+    const num = v => v.trim() === "" || isNaN(Number(v)) ? null : Number(v);
+    const body = { name: $("#c-name").value, lat: num($("#c-lat").value), lng: num($("#c-lng").value), radius_m: Math.round(num($("#c-rad").value) ?? cfg.default_radius_m) };
+    try { await rpc("cw_counter_save", { p_id: e ? e.id : null, ...pk(body) }); toast(e ? "Counter saved" : "Counter added"); editing = null; renderCounters() }
+    catch (err) { $("#c-err").textContent = err.message; $("#c-err").hidden = false }
+  };
+  document.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => { editing = Number(b.dataset.edit); renderCounters(); scrollTo(0, 0) });
+  document.querySelectorAll("[data-toggle]").forEach(b => b.onclick = async () => {
+    const c = counters.find(x => x.id === Number(b.dataset.toggle));
+    try { await rpc("cw_counter_save", { p_id: c.id, p_active: !c.active }); toast(c.active ? `${c.name} turned off` : `${c.name} turned on`); renderCounters() } catch (err) { toast(err.message) }
+  });
+}
+
+// ---------- admin: team ----------
+async function renderTeam(){
+  let onDuty = [];
+  try { users = (await rpc("cw_list_users")).users; onDuty = (await rpc("cw_status")).counters.flatMap(c => c.shifts) } catch (err) { return toast(err.message) }
+  const at = id => onDuty.find(s => s.user_id === id);
+  $("#main").innerHTML = `<div class="vhead"><div><h1>Team</h1><p class="small" style="margin:2px 0 0">Add each agent, then give them their username and temporary password. They can change it under “My account”.</p></div></div>
+    <form class="box" id="addUser">
+      <b>Add a person</b>
+      <div class="grid2">
+        <div class="field"><label for="t-name">Name</label><input id="t-name" required></div>
+        <div class="field"><label for="t-user">Username</label><input id="t-user" required autocapitalize="none" spellcheck="false" placeholder="e.g. mei.lin"></div>
+        <div class="field"><label for="t-pw">Temporary password (8+ characters)</label><input id="t-pw" required minlength="8"></div>
+        <div class="field" style="justify-content:flex-end"><label style="display:flex;gap:6px;align-items:center;color:var(--fg);font-weight:400"><input type="checkbox" id="t-admin"> Admin: can see the live board and manage counters and people</label></div>
+      </div>
+      <p class="err" id="t-err" hidden></p>
+      <div><button class="primary" type="submit">Add person</button></div>
+    </form>
+    <div class="tbox"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Right now</th><th></th></tr></thead><tbody>
+      ${users.map(u => { const s = at(u.id); return `<tr><td>${esc(u.name)}${u.active ? "" : ' <span class="small">(deactivated)</span>'}</td><td class="mono">${esc(u.username)}</td>
+        <td>${u.is_admin ? "Admin" : "Agent"}</td><td>${s ? `${esc(s.counter_name)} <span class="pill p-${s.presence}">${PRESENCE[s.presence]}</span>` : '<span class="small">Not checked in</span>'}</td>
+        <td style="white-space:nowrap">${u.id === me.id ? '<span class="small">You</span>' : `
+          <button type="button" class="sm" data-reset="${u.id}">Reset password</button>
+          <button type="button" class="sm" data-role="${u.id}">${u.is_admin ? "Make agent" : "Make admin"}</button>
+          <button type="button" class="sm ${u.active ? "danger" : ""}" data-active="${u.id}">${u.active ? "Deactivate" : "Reactivate"}</button>`}</td></tr>
+        <tr hidden id="reset-${u.id}"><td colspan="5"><form class="grid2" data-resetform="${u.id}"><div class="field"><label for="rp-${u.id}">New temporary password for ${esc(u.name)}</label><input id="rp-${u.id}" minlength="8" required></div>
+          <div style="display:flex;align-items:flex-end"><button class="primary" type="submit">Set password</button></div></form></td></tr>` }).join("")}
+    </tbody></table></div>
+    <p class="small">${users.filter(u => u.active).length} active people. Deactivated people can't sign in and are checked out, but their history stays.</p>`;
+  $("#addUser").onsubmit = async e => {
+    e.preventDefault();
+    try {
+      await rpc("cw_user_add", pk({ name: $("#t-name").value, username: $("#t-user").value, password: $("#t-pw").value, is_admin: $("#t-admin").checked }));
+      toast(`Added ${$("#t-name").value}. Send them the username and password.`); renderTeam();
+    } catch (err) { $("#t-err").textContent = err.message; $("#t-err").hidden = false }
+  };
+  const put = async (id, body, msg) => { try { await rpc("cw_user_update", { p_id: Number(id), ...pk(body) }); toast(msg); renderTeam() } catch (err) { toast(err.message) } };
+  document.querySelectorAll("[data-reset]").forEach(b => b.onclick = () => { const r = $("#reset-" + b.dataset.reset); r.hidden = !r.hidden });
+  document.querySelectorAll("[data-resetform]").forEach(f => f.onsubmit = e => { e.preventDefault(); const id = f.dataset.resetform; put(id, { password: $("#rp-" + id).value }, "Password changed. They'll need to sign in again.") });
+  document.querySelectorAll("[data-role]").forEach(b => b.onclick = () => { const u = users.find(x => x.id === Number(b.dataset.role)); put(u.id, { is_admin: !u.is_admin }, u.is_admin ? `${u.name} is now an agent` : `${u.name} is now an admin`) });
+  document.querySelectorAll("[data-active]").forEach(b => b.onclick = () => {
+    const u = users.find(x => x.id === Number(b.dataset.active));
+    if (u.active && b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Click again to confirm"; return }
+    put(u.id, { active: !u.active }, u.active ? `${u.name} can no longer sign in` : `${u.name} can sign in again`);
+  });
+}
+
+// ---------- account ----------
+function renderAccount(){
+  $("#main").innerHTML = `<div class="vhead"><h1>My account</h1></div>
+    <p class="small" style="margin:0">Signed in as <b>${esc(me.name)}</b> (<span class="mono">${esc(me.username)}</span>) · ${me.is_admin ? "Admin" : "Agent"}</p>
+    <form class="box" id="pwForm" style="max-width:420px">
+      <b>Change password</b>
+      <div class="field"><label for="p-cur">Current password</label><input id="p-cur" type="password" required autocomplete="current-password"></div>
+      <div class="field"><label for="p-new">New password (8+ characters)</label><input id="p-new" type="password" required minlength="8" autocomplete="new-password"></div>
+      <p class="err" id="p-err" hidden></p>
+      <div><button class="primary" type="submit">Change password</button></div>
+    </form>
+    <p class="small">While you're checked in, this app records your location once a minute so your admin can see the counter is staffed. It stops when you check out.</p>`;
+  $("#pwForm").onsubmit = async e => {
+    e.preventDefault();
+    try { await rpc("cw_change_password", { p_current: $("#p-cur").value, p_new: $("#p-new").value }); $("#pwForm").reset(); toast("Password changed") }
+    catch (err) { $("#p-err").textContent = err.message; $("#p-err").hidden = false }
+  };
+}
+
+boot();
+</script>
+</body>
+</html>
