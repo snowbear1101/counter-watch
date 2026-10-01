@@ -271,7 +271,11 @@ function renderAuth(setup, needCode){
     try {
       const body = { username: $("#a-user").value, password: $("#a-pw").value };
       if (setup) { body.name = $("#a-name").value; body.setup_code = $("#a-code")?.value || "" }
+      // A browser that has signed in before keeps a device token, so it isn't caught by lockouts aimed at the account.
+      const devKey = "cw_device:" + body.username.trim().toLowerCase();
+      if (!setup) try { body.device = localStorage.getItem(devKey) } catch {}
       const d = await rpc(setup ? "cw_setup" : "cw_login", pk(body), { auth: false });
+      if (d.device) try { localStorage.setItem(devKey, d.device) } catch {}
       saveToken(d.token); signedIn(d);
     } catch (err) { const el = $("#a-err"); el.textContent = err.message; el.hidden = false }
   });
