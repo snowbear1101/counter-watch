@@ -336,6 +336,8 @@ create or replace function cw_checkin(p_token text, p_counter_id bigint, p_lat f
 language plpgsql security definer set search_path = public, extensions, pg_temp as $$
 declare me cw_users := cw_auth(p_token); c cw_counters; cur jsonb; d float8; sid bigint; cfg jsonb := cw_config();
 begin
+  -- One check-in at a time per person, so two at once (double tap, second device) can't both open a shift.
+  perform 1 from cw_users where id = me.id for no key update;
   perform cw_sweep();
   cur := cw_open_shift(me.id);
   if cur is not null then perform cw_fail(format('You''re already checked in at %s. Check out first.', cur->>'counter_name'), 'PT409'); end if;
