@@ -47,3 +47,14 @@ The page is public, so all the rules live in the database. Every table has row-l
 - **It's a strong check, not proof.** Browser location can be faked. The log keeps every reading and the device used for each check-in.
 - **Tell your agents.** Location is recorded once a minute only while someone is checked in. Check your local workplace-privacy rules (e.g. PDPA) before you start.
 - **Backups:** Supabase → Database → Backups, or export tables from the Table Editor.
+
+## Tests
+
+`tests/` checks every `cw_*` function the page calls, against a throwaway database on a local PostgreSQL (14 or newer). It needs only `psql` and a server you can create databases and roles on; nothing else is installed.
+
+```sh
+tests/run.sh                  # all files
+tests/run.sh test_shifts.sql  # one file
+```
+
+It prints any failed assertions and ends with a coverage line. **Functions** counts the page functions that ran. **Branches** counts the distinct error messages (`cw_fail(...)` or `{"error": ...}`) that a test triggered.
