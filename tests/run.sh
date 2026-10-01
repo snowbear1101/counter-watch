@@ -3,7 +3,7 @@
 # Uses the usual libpq settings (PGHOST, PGPORT, PGUSER...); the user must be able to create
 # databases and roles. Nothing is installed: just psql and a server.
 #
-#   tests/run.sh               run every tests/test_*.sql
+#   tests/run.sh               run every tests/test_*.sql and tests/test_*.sh (which get PGDATABASE)
 #   tests/run.sh test_auth.sql run one file
 set -eu
 cd "$(dirname "$0")"
@@ -24,10 +24,14 @@ q -o /dev/null -f ../schema.sql
 q -f lib.sql
 
 status=0
-files=${*:-$(ls test_*.sql)}
+files=${*:-$(ls test_*.sql test_*.sh)}
 for f in $files; do
   printf '%s ... ' "$f"
-  if ! out=$(q -o /dev/null -f "$f" 2>&1); then echo ERROR; status=1
+  case $f in
+    *.sh) run() { PGDATABASE="$db" sh "$f" 2>&1; } ;;
+    *)    run() { q -o /dev/null -f "$f" 2>&1; } ;;
+  esac
+  if ! out=$(run); then echo ERROR; status=1
   elif printf "%s" "$out" | grep -q "FAIL:"; then echo FAILED
   else echo ok; fi
   if [ -n "$out" ]; then echo "$out"; fi
