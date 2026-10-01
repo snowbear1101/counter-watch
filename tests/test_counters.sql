@@ -30,6 +30,9 @@ select ((:'z'::jsonb)->>'id')::bigint as zid, ((:'x'::jsonb)->>'id')::bigint as 
 select t.raises(format('cw_counter_save(%L, 999, p_name => %L)', :'boss', 'Q'), 'That counter doesn''t exist.', 'update: missing counter', 'PT404');
 select t.raises(format('cw_counter_save(%L, %s, p_name => %L)', :'boss', :zid, ''), 'Give the counter a name.', 'update: blank name');
 select t.raises(format('cw_counter_save(%L, %s, p_lat => 5)', :'boss', :zid), 'That location isn''t valid.', 'update: latitude without longitude');
+select t.raises(format('cw_counter_save(%L, %s, p_lng => 500)', :'boss', :zid), 'That location isn''t valid.', 'update: longitude out of range');
+select t.raises(format('cw_counter_save(%L, %s, p_lng => %L)', :'boss', :zid, 'NaN'), 'That location isn''t valid.', 'update: NaN longitude');
+select t.raises(format('cw_counter_save(%L, %s, p_lat => 1.3, p_lng => %L)', :'boss', :zid, 'Infinity'), 'That location isn''t valid.', 'update: infinite longitude');
 select t.raises(format('cw_counter_save(%L, %s, p_radius_m => 5000)', :'boss', :zid), 'Radius must be between 10 and 1000 metres.', 'update: bad radius');
 select t.eq(cw_counter_save(:'boss', :zid, p_name => 'Alpha desk')->'counter',
   jsonb_build_object('id', :zid, 'name', 'Alpha desk', 'lat', 1.3, 'lng', 103.8, 'radius_m', 50, 'active', true), 'update: rename only');

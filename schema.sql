@@ -313,7 +313,8 @@ begin
     perform cw_fail('That counter doesn''t exist.', 'PT404');
   end if;
   if p_name is not null and trim(p_name) = '' then perform cw_fail('Give the counter a name.'); end if;
-  if p_lat is not null and (p_lat not between -90 and 90 or p_lng is null or p_lng not between -180 and 180) then
+  if (p_lat is not null or p_lng is not null)
+     and (p_lat is null or p_lat not between -90 and 90 or p_lng is null or p_lng not between -180 and 180) then
     perform cw_fail('That location isn''t valid.');
   end if;
   if p_radius_m is not null and p_radius_m not between 10 and 1000 then perform cw_fail('Radius must be between 10 and 1000 metres.'); end if;
