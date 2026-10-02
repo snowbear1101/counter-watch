@@ -76,17 +76,25 @@ create table if not exists cw_login_fails (
   key text not null,
   at timestamptz not null default now()
 );
+-- Browsers that have signed in successfully before. Only a SHA-256 of each device token is kept.
+create table if not exists cw_devices (
+  token_hash text primary key,
+  user_id bigint not null references cw_users(id),
+  created_at timestamptz not null default now(),
+  last_used_at timestamptz not null default now()
+);
 create index if not exists cw_shifts_open on cw_shifts (end_at);
 create index if not exists cw_shifts_start on cw_shifts (start_at);
 create index if not exists cw_shifts_user on cw_shifts (user_id) where end_at is null;
 create index if not exists cw_pings_shift on cw_pings (shift_id);
 create index if not exists cw_login_fails_key on cw_login_fails (key, at);
+create index if not exists cw_devices_user on cw_devices (user_id);
 
 -- Lock every table: no direct access through the public API.
 do $$
 declare t text;
 begin
-  foreach t in array array['cw_settings','cw_users','cw_sessions','cw_counters','cw_shifts','cw_pings','cw_login_fails'] loop
+  foreach t in array array['cw_settings','cw_users','cw_sessions','cw_counters','cw_shifts','cw_pings','cw_login_fails','cw_devices'] loop
     execute format('alter table %I enable row level security', t);
     execute format('revoke all on table %I from anon, authenticated', t);
   end loop;
@@ -123,7 +131,10 @@ create or replace function cw_config() returns jsonb language sql immutable as $
     'accuracy_allowance_m', 50,  -- how much of the stated accuracy gets the benefit of the doubt
     'default_radius_m', 50,
     'session_days', 14,
-    'login_max_fails', 5,
+    -- Wrong passwords within login_window_min. Each limit blocks only what it names:
+    'login_max_fails', 5,          -- one account from one address (or one remembered browser)
+    'login_max_fails_ip', 30,      -- one address, any accounts (guessing across many usernames)
+    'login_max_fails_user', 20,    -- one account from addresses it hasn't signed in from before
     'login_window_min', 15)
 $$;
 
@@ -150,13 +161,17 @@ exception when others then
   return null;
 end $$;
 
-create or replace function cw_throttled(keys text[]) returns boolean language plpgsql as $$
-declare c jsonb := cw_config();
+drop function if exists cw_throttled(text[]);  -- replaced by cw_too_many
+-- True when `key` has `max_fails` or more failures in the window. Old failures are cleared first.
+create or replace function cw_too_many(key text, max_fails int) returns boolean language plpgsql as $$
 begin
-  delete from cw_login_fails where at < now() - make_interval(mins => (c->>'login_window_min')::int);
-  return exists (select 1 from cw_login_fails where key = any(keys)
-                 group by key having count(*) >= (c->>'login_max_fails')::int);
+  delete from cw_login_fails where at < now() - make_interval(mins => (cw_config()->>'login_window_min')::int);
+  return key is not null and (select count(*) from cw_login_fails f where f.key = cw_too_many.key) >= max_fails;
 end $$;
+
+create or replace function cw_wait_message() returns text language sql immutable as $$
+  select format('Too many wrong attempts. Wait %s minutes, or ask your admin to reset your password.', cw_config()->>'login_window_min')
+$$;
 
 create or replace function cw_auth(p_token text) returns cw_users language plpgsql as $$
 declare u cw_users;
@@ -274,7 +289,9 @@ language plpgsql security definer set search_path = public, extensions, pg_temp 
 declare keys text[] := array_remove(array['setup:' || cw_ip()], null); uname text := lower(trim(coalesce(p_username, ''))); u cw_users;
 begin
   if exists (select 1 from cw_users) then perform cw_fail('The admin account already exists.', 'PT403'); end if;
-  if cw_throttled(keys) then return jsonb_build_object('error', 'Too many wrong attempts. Try again in 15 minutes.'); end if;
+  if cw_too_many(keys[1], (cw_config()->>'login_max_fails')::int) then
+    return jsonb_build_object('error', format('Too many wrong attempts. Try again in %s minutes.', cw_config()->>'login_window_min'));
+  end if;
   if coalesce(trim(p_setup_code), '') <> (select setup_code from cw_settings) then
     insert into cw_login_fails (key) select unnest(keys);
     return jsonb_build_object('error', 'That setup code is wrong. Find it in Supabase: run  select setup_code from cw_settings;');
@@ -285,23 +302,50 @@ begin
   return jsonb_build_object('token', cw_new_session(u.id), 'user', cw_user_json(u), 'shift', null, 'config', cw_config());
 end $$;
 
-create or replace function cw_login(p_username text, p_password text) returns jsonb
+-- Wrong passwords are counted per account+address, so an attacker can only block their own
+-- address, not the real user. A browser that has signed in before carries a device token and is
+-- judged on its own record, so it keeps working even while an account or address is under attack.
+drop function if exists cw_login(text, text);  -- older version without p_device
+create or replace function cw_login(p_username text, p_password text, p_device text default null) returns jsonb
 language plpgsql security definer set search_path = public, extensions, pg_temp as $$
 declare uname text := lower(trim(coalesce(p_username, '')));
-        keys text[] := array_remove(array['user:' || uname, 'ip:' || cw_ip()], null);
+        ip text := cw_ip();
+        cfg jsonb := cw_config();
+        dev_hash text := case when coalesce(p_device, '') <> '' then cw_hash_token(p_device) end;
+        known_device boolean;
+        pair_key text;
         u cw_users;
+        new_device text;
 begin
-  if cw_throttled(keys) then
-    return jsonb_build_object('error', 'Too many wrong attempts. Wait 15 minutes, or ask your admin to reset your password.');
-  end if;
   select * into u from cw_users where username = uname;
-  if not found or not u.active or u.pw_hash is distinct from crypt(coalesce(p_password, ''), u.pw_hash) then
-    insert into cw_login_fails (key) select unnest(keys);
+  known_device := dev_hash is not null and found and exists (select 1 from cw_devices where token_hash = dev_hash and user_id = u.id);
+  pair_key := case when known_device then 'dev:' || dev_hash
+                   when ip is not null then 'pair:' || uname || '|' || ip end;
+  if cw_too_many(pair_key, (cfg->>'login_max_fails')::int)
+     or (not known_device and (cw_too_many('ip:' || ip, (cfg->>'login_max_fails_ip')::int)
+                               or cw_too_many('user:' || uname, (cfg->>'login_max_fails_user')::int))) then
+    return jsonb_build_object('error', cw_wait_message());
+  end if;
+  -- Compare against a dummy hash when there's no such user, so timing doesn't reveal usernames.
+  if u.id is null or not u.active
+     or u.pw_hash is distinct from crypt(coalesce(p_password, ''), coalesce(u.pw_hash, '$2a$10$abcdefghijklmnopqrstuuJ6HFzXeqWO1y3ZxAa0bKJm1k7PqK/Rm')) then
+    insert into cw_login_fails (key) select k from unnest(array[pair_key, 'ip:' || ip, 'user:' || uname]) k where k is not null;
     return jsonb_build_object('error', 'Wrong username or password.');
   end if;
-  delete from cw_login_fails where key = 'user:' || uname;
+  -- Clear only this browser's/address's record. The account-wide count isn't reset by a success,
+  -- or each real sign-in would hand an attacker a fresh batch of guesses; it expires on its own.
+  delete from cw_login_fails where key = pair_key;
+  if known_device then
+    update cw_devices set last_used_at = now() where token_hash = dev_hash;
+  else
+    new_device := replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '');
+    insert into cw_devices (token_hash, user_id) values (cw_hash_token(new_device), u.id);
+    delete from cw_devices where user_id = u.id and token_hash not in
+      (select token_hash from cw_devices where user_id = u.id order by last_used_at desc limit 10);
+  end if;
   perform cw_sweep();
-  return jsonb_build_object('token', cw_new_session(u.id), 'user', cw_user_json(u), 'shift', cw_open_shift(u.id), 'config', cw_config());
+  return jsonb_build_object('token', cw_new_session(u.id), 'device', new_device, 'user', cw_user_json(u),
+                            'shift', cw_open_shift(u.id), 'config', cfg);
 end $$;
 
 create or replace function cw_logout(p_token text) returns jsonb
@@ -490,7 +534,7 @@ begin
     if length(p_password) < 8 then perform cw_fail('Password must be at least 8 characters.'); end if;
     update cw_users set pw_hash = crypt(p_password, gen_salt('bf', 10)) where id = p_id;
     delete from cw_sessions where user_id = p_id;
-    delete from cw_login_fails where key = 'user:' || t.username;
+    delete from cw_login_fails where key = 'user:' || t.username or key like 'pair:' || t.username || '|%';
   end if;
   if p_active is not null then
     if p_id = me.id then perform cw_fail('You can''t deactivate your own account.'); end if;

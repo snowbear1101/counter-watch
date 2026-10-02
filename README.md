@@ -24,7 +24,11 @@ To find the setup code again, run `select setup_code from cw_settings;` in the S
 - **Check-in** needs the agent within the counter's radius (default 50 m) and a location accurate to ±150 m or better. Up to 50 m of the phone's stated accuracy is given the benefit of the doubt.
 - **While checked in**, the page sends the location every minute and asks the phone to keep the screen on. If the screen locks or the page is closed, checks pause and the counter shows *No signal*.
 - **Automatic check-out:** after 30 minutes with no location, the agent is checked out at the last moment they were confirmed.
-- Sign-in locks for 15 minutes after 5 wrong passwords for one username (or from one address). An admin password reset clears it for that person.
+- **Wrong passwords** (counted over 15 minutes):
+  - **5 for one account from one address:** that address can't sign in to that account. Other people, and the same person elsewhere, aren't affected.
+  - **30 from one address across any accounts:** that address is blocked.
+  - **20 for one account from many addresses:** only browsers that have never signed in to it are blocked. A browser that has signed in successfully before is remembered and keeps working, so an attacker can't lock the admin out of their usual browser.
+  - An admin password reset clears the lock for that person.
 
 The numbers are in `cw_config()` at the top of `schema.sql`. Change them there and run the file again; it keeps your data.
 
