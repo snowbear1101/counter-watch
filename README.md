@@ -28,6 +28,13 @@ To find the setup code again, run `select setup_code from cw_settings;` in the S
 
 The numbers are in `cw_config()` at the top of `schema.sql`. Change them there and run the file again; it keeps your data.
 
+## Updating
+
+When you pull a new version, run the whole `schema.sql` again in the SQL Editor *before* the new page goes live.
+- **Functions:** it replaces all the app's functions, dropping old versions first so none linger.
+- **Tables:** it applies any column changes listed in the file.
+- **Failures:** it runs as one transaction, so if anything fails nothing changes and the current site keeps working.
+
 ## Who can do what
 
 | | Agent | Admin |

@@ -1,11 +1,19 @@
 -- Counter Watch database for Supabase.
 -- Paste this whole file into Supabase → SQL Editor → New query, then press Run.
--- Safe to run again later: it updates the functions and keeps your data.
+--
+-- Running it again (e.g. after pulling a new version) keeps your data and:
+--   * replaces every cw_* function with the versions in this file. Old versions are dropped
+--     first, so a function whose parameters changed can't linger as a second, still-callable copy;
+--   * creates any new tables, and applies the column changes listed under "changes to existing
+--     tables". `create table if not exists` alone never changes a table that already exists.
+-- The whole file runs as one transaction: if anything fails, nothing is changed.
 --
 -- How it's protected: the web page is public and only holds Supabase's public "anon" key.
 -- Every table has row-level security switched on with no policies, so the key cannot read or
 -- write any table directly. The page can only call the cw_* functions below, and each of
 -- those checks the caller's sign-in and role first. Times come from the database clock.
+
+begin;
 
 create extension if not exists pgcrypto with schema extensions;
 
@@ -81,6 +89,27 @@ begin
   foreach t in array array['cw_settings','cw_users','cw_sessions','cw_counters','cw_shifts','cw_pings','cw_login_fails'] loop
     execute format('alter table %I enable row level security', t);
     execute format('revoke all on table %I from anon, authenticated', t);
+  end loop;
+end $$;
+
+-- ---------- changes to existing tables ----------
+-- `create table if not exists` above only shapes brand-new databases. When a later version adds
+-- or changes a column, add it here as well, written so it can run any number of times, e.g.
+--   alter table cw_shifts add column if not exists note text not null default '';
+-- (None yet.)
+
+-- ---------- functions: start from a clean slate ----------
+-- Drop every existing cw_* function, whatever its parameters, before (re)creating them below.
+-- `create or replace` only replaces a function with the *same* parameter list, so without this an
+-- older version would stay behind and be granted to the public key again by the loop at the end.
+-- Nothing else in the database depends on these functions, and the transaction means the page
+-- never sees them missing.
+do $$
+declare f regprocedure;
+begin
+  for f in select p.oid::regprocedure from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname like 'cw\_%' loop
+    execute format('drop function %s', f);
   end loop;
 end $$;
 
@@ -493,6 +522,8 @@ begin
     end if;
   end loop;
 end $$;
+
+commit;
 
 -- Your admin setup code (you'll type it into the app once, to create the admin account):
 select setup_code from cw_settings;
