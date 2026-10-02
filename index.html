@@ -133,12 +133,14 @@ tr.click{cursor:pointer} tr.click:hover td{background:var(--bg)}
 dialog{border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--fg);padding:0;width:min(720px,calc(100vw - 32px));max-height:calc(100vh - 32px)}
 dialog::backdrop{background:rgba(8,16,18,.55)}
 .dlg{padding:20px;display:flex;flex-direction:column;gap:14px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:8px;font-weight:700;z-index:2000;max-width:calc(100vw - 32px)}
 </style>
 </head>
 <body>
 <div id="app"></div>
 <div class="toast" id="toast" role="status" hidden></div>
+<div class="sr-only" id="announce" aria-live="polite"></div>
 <dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
 
 <script>
@@ -173,6 +175,44 @@ async function rpc(fn, args = {}, { auth = true } = {}){
   return d;
 }
 function toast(m){ const t = $("#toast"); t.textContent = m; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => t.hidden = true, 3200) }
+// Tell screen-reader users about a change they can't see happen (status flips, connection lost).
+function announce(m){ const a = $("#announce"); a.textContent = ""; setTimeout(() => a.textContent = m, 50) }
+
+// ---------- two-tap confirm ----------
+// A destructive button arms on the first tap and acts on the second, within CONFIRM_MS.
+// The armed state lives here rather than on the button, so re-rendering the view keeps it;
+// `busyKey` blocks a second request while the first is still running.
+const CONFIRM_MS = 5000;
+let armedKey = null, armedTimer = null, busyKey = null;
+const isArmed = k => armedKey === k;
+const isBusy = k => busyKey === k;
+function disarm(){ clearTimeout(armedTimer); armedKey = null }
+async function confirmTap(key, redraw, action){
+  if (busyKey) return;
+  if (armedKey !== key) {
+    disarm(); armedKey = key;
+    armedTimer = setTimeout(() => { if (armedKey === key) { armedKey = null; redraw() } }, CONFIRM_MS);
+    return redraw();
+  }
+  disarm(); busyKey = key; redraw();
+  try { await action() } finally { busyKey = null; redraw() }
+}
+
+// Re-rendering replaces elements; put focus back on the new element with the same data-key.
+function keepFocus(render){
+  const k = document.activeElement?.dataset?.key;
+  render();
+  if (!k) return;
+  const el = document.querySelector(`[data-key="${CSS.escape(k)}"]`);
+  if (el && el !== document.activeElement) el.focus();
+}
+
+// Relative times are filled in (and refreshed) here, so the HTML around them doesn't change every tick.
+function updateTimes(root){
+  if (!root) return;
+  root.querySelectorAll("[data-ago]").forEach(e => e.textContent = agoText(e.dataset.ago));
+  root.querySelectorAll("[data-dur]").forEach(e => e.textContent = dur(Date.now() - parseTs(e.dataset.dur)));
+}
 
 // ---------- time ----------
 const parseTs = s => new Date(s);
@@ -228,7 +268,10 @@ async function sendPing(){
     const d = await rpc("cw_ping", pk(fix));
     lastPingErr = "";
     if (!d.shift) { shift = null; nearby = null; stopHeartbeat(); toast("You've been checked out.") }
-    else shift = d.shift;
+    else {
+      if (shift && d.shift.presence !== shift.presence) announce(`You're now shown as ${PRESENCE[d.shift.presence].toLowerCase()}.`);
+      shift = d.shift;
+    }
   } catch (err) { lastPingErr = err.message }
   if (view === "desk") renderDesk();
 }
@@ -279,7 +322,7 @@ function renderAuth(setup, needCode){
 
 // ---------- shell ----------
 function renderShell(){
-  clearInterval(boardTimer); clearInterval(tickTimer); boardTimer = tickTimer = null;
+  clearInterval(boardTimer); clearInterval(tickTimer); boardTimer = tickTimer = null; disarm();
   const tabs = me.is_admin
     ? [["live", "Live board"], ["log", "Log"], ["counters", "Counters"], ["team", "Team"], ["desk", "My check-in"], ["account", "My account"]]
     : [["desk", "Check in"], ["account", "My account"]];
@@ -315,7 +358,8 @@ function renderDesk(){
   if (shift) {
     const p = shift.presence, cls = p === "present" ? "on" : "away";
     const where = shift.last_dist == null ? "" : `${Math.round(shift.last_dist)} m from the counter (±${Math.round(shift.last_acc)} m)`;
-    main.innerHTML = `<div class="desk">${insecure}
+    const out = isBusy("checkout") ? "Checking out…" : isArmed("checkout") ? "Tap again to check out" : "Check out";
+    keepFocus(() => main.innerHTML = `<div class="desk">${insecure}
       <div class="here ${cls}">
         <div class="row" style="justify-content:space-between"><span class="small">You're checked in at</span><span class="pill p-${p}">${PRESENCE[p]}</span></div>
         <h2>${esc(shift.counter_name)}</h2>
@@ -325,14 +369,13 @@ function renderDesk(){
         ${lastPingErr ? `<div class="notice bad">${esc(lastPingErr)}</div>` : ""}
         <div class="small">Keep this page open while you're on duty. It confirms your location every minute.
           ${wakeLock ? "The screen is being kept on." : "If the screen locks, location checks pause and your counter shows “No signal” after " + Math.round(cfg.stale_sec / 60) + " minutes. After " + cfg.auto_checkout_min + " minutes you're checked out automatically."}</div>
-        <div class="row"><button type="button" id="pingNow">Confirm location now</button><button type="button" class="danger" id="checkout">Check out</button></div>
-      </div></div>`;
+        <div class="row"><button type="button" id="pingNow" data-key="ping">Confirm location now</button><button type="button" class="danger" id="checkout" data-key="checkout" ${isBusy("checkout") ? "disabled" : ""}>${out}</button></div>
+      </div></div>`);
     $("#pingNow").onclick = async e => { e.target.disabled = true; e.target.textContent = "Checking…"; await sendPing() };
-    $("#checkout").onclick = async e => {
-      const b = e.target;
-      if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Tap again to check out"; return }
-      try { await rpc("cw_checkout"); shift = null; stopHeartbeat(); nearby = null; toast("Checked out"); renderDesk(); locate() } catch (err) { toast(err.message) }
-    };
+    $("#checkout").onclick = () => confirmTap("checkout", renderDesk, async () => {
+      // On success the redraw after this shows the check-in list and starts locating.
+      try { await rpc("cw_checkout"); shift = null; stopHeartbeat(); nearby = null; toast("Checked out") } catch (err) { toast(err.message) }
+    });
     tickTimer = setInterval(() => {
       if (!$("#clock")) return;
       $("#clock").textContent = dur(Date.now() - parseTs(shift.start_at));
@@ -368,6 +411,7 @@ function renderDesk(){
 
 // ---------- admin: live board ----------
 let board = null, boardMap = null, boardLayer = null, boardFitted = false, boardDown = false, boardAt = null;
+let boardSeen = null;  // last status per counter and connection state, for announcements
 async function refreshBoard(){
   try { board = await rpc("cw_status"); boardDown = false; boardAt = new Date() } catch { boardDown = true }
   if (view === "live") drawBoard();
@@ -377,7 +421,15 @@ function renderLive(){
       <div class="live" id="liveState"><span class="dot"></span><span>Loading…</span></div></div>
     <div id="boardBody"><p class="small">Loading…</p></div>
     <section class="section"><h2>Map</h2>${hasMap() ? `<div id="map"></div>` : `<div class="box nomap small">The map needs an internet connection to load. The board above still works.</div>`}</section>`;
-  boardMap = null; boardFitted = false;
+  boardMap = null; boardFitted = false; boardSeen = null;
+  $("#boardBody").addEventListener("click", e => {
+    const b = e.target.closest("[data-end]");
+    if (b) return confirmTap("end-" + b.dataset.end, () => drawBoard(false), async () => {
+      try { await rpc("cw_end_shift", { p_shift_id: Number(b.dataset.end) }); toast(`${b.dataset.name} checked out`); await refreshBoard() }
+      catch (err) { toast(err.message) }
+    });
+    if (e.target.closest("#goCounters")) { e.preventDefault(); view = "counters"; renderShell() }
+  });
   if (hasMap()) {
     boardMap = L.map("map", { scrollWheelZoom: false });
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(boardMap);
@@ -387,9 +439,23 @@ function renderLive(){
   if (board) drawBoard();
   refreshBoard();
   boardTimer = setInterval(refreshBoard, 10000);
-  tickTimer = setInterval(() => { if (board && view === "live") drawBoard(true) }, 5000);
+  tickTimer = setInterval(() => { if (view === "live") updateTimes($("#boardBody")) }, 5000);
 }
-function drawBoard(textOnly){
+function counterCard(c){
+  const endLabel = s => isBusy("end-" + s.id) ? "Checking out…" : isArmed("end-" + s.id) ? `Confirm: check out ${esc(s.user_name)}` : "Check out";
+  return `<div class="ccard ${c.status}" data-id="${c.id}">
+      <div class="chead"><h3>${esc(c.name)}</h3><span class="pill s-${c.status}">${STATUS[c.status]}</span></div>
+      ${c.status === "unmanned" ? `<div class="small">${c.unmanned_since ? `Nobody here for <b class="alert" data-dur="${c.unmanned_since}"></b> · last agent left ${fmtDT(c.unmanned_since)}` : "Nobody has checked in here yet."}</div>` : ""}
+      ${c.shifts.map(s => `<div class="agent">
+        <div class="row"><b>${esc(s.user_name)}</b><span class="pill p-${s.presence}">${PRESENCE[s.presence]}</span></div>
+        <div class="small">In since ${fmtTime(s.start_at)} (<span data-dur="${s.start_at}"></span>) · seen <span data-ago="${s.last_seen_at}"></span>${s.last_dist != null ? ` · ${Math.round(s.last_dist)} m away` : ""}</div>
+        <div><button type="button" class="sm danger" data-key="end-${s.id}" data-end="${s.id}" data-name="${esc(s.user_name)}" ${isBusy("end-" + s.id) ? "disabled" : ""}>${endLabel(s)}</button></div>
+      </div>`).join("")}
+    </div>`;
+}
+// Cards are matched by counter id and only replaced when their own content changes, so an armed
+// button, keyboard focus and the reader's place survive the 10-second refresh.
+function drawBoard(withMap = true){
   const st = $("#liveState"); if (!st || !board) return;
   st.className = "live" + (boardDown ? " down" : "");
   st.innerHTML = `<span class="dot"></span><span>${boardDown ? "Can't reach the server. Showing the last known state." : "Live · updated " + boardAt.toLocaleTimeString("en-SG")}</span>`;
@@ -398,29 +464,40 @@ function drawBoard(textOnly){
   const agents = cs.reduce((a, c) => a + c.shifts.length, 0);
   document.title = n("unmanned") ? `(${n("unmanned")} unmanned) Counter Watch` : "Counter Watch";
   const sorted = [...cs].sort((a, b) => order[a.status] - order[b.status] || a.name.localeCompare(b.name));
-  $("#boardBody").innerHTML = `
-    <div class="stats" style="margin-bottom:14px">
+  if (boardSeen) {
+    const changes = cs.filter(c => boardSeen.status.has(c.id) && boardSeen.status.get(c.id) !== c.status).map(c => `${c.name} is now ${STATUS[c.status].toLowerCase()}.`);
+    if (boardDown !== boardSeen.down) changes.unshift(boardDown ? "Lost connection to the server." : "Connection restored.");
+    if (changes.length) announce(changes.join(" "));
+  }
+  boardSeen = { down: boardDown, status: new Map(cs.map(c => [c.id, c.status])) };
+  const body = $("#boardBody");
+  if (!cs.length) {
+    body.innerHTML = `<div class="box"><span class="small">No counters yet. Add them on the <a href="#" id="goCounters">Counters</a> page.</span></div>`;
+  } else {
+    if (!$("#boardCards")) body.innerHTML = `<div class="stats" id="boardStats" style="margin-bottom:14px"></div><div class="board" id="boardCards"></div>`;
+    $("#boardStats").innerHTML = `
       <div class="stat bad"><b>${n("unmanned")}</b><span>Unmanned</span></div>
       <div class="stat warn"><b>${n("check")}</b><span>Need checking</span></div>
       <div class="stat ok"><b>${n("staffed")}</b><span>Staffed</span></div>
-      <div class="stat"><b>${agents}</b><span>Agents checked in</span></div>
-    </div>
-    ${cs.length ? `<div class="board">${sorted.map(c => `<div class="ccard ${c.status}">
-      <div class="chead"><h3>${esc(c.name)}</h3><span class="pill s-${c.status}">${STATUS[c.status]}</span></div>
-      ${c.status === "unmanned" ? `<div class="small">${c.unmanned_since ? `Nobody here for <b class="alert">${dur(Date.now() - parseTs(c.unmanned_since))}</b> · last agent left ${fmtDT(c.unmanned_since)}` : "Nobody has checked in here yet."}</div>` : ""}
-      ${c.shifts.map(s => `<div class="agent">
-        <div class="row"><b>${esc(s.user_name)}</b><span class="pill p-${s.presence}">${PRESENCE[s.presence]}</span></div>
-        <div class="small">In since ${fmtTime(s.start_at)} (${dur(Date.now() - parseTs(s.start_at))}) · seen ${agoText(s.last_seen_at)}${s.last_dist != null ? ` · ${Math.round(s.last_dist)} m away` : ""}</div>
-        <div><button type="button" class="sm danger" data-end="${s.id}" data-name="${esc(s.user_name)}">Check out</button></div>
-      </div>`).join("")}
-    </div>`).join("")}</div>` : `<div class="box"><span class="small">No counters yet. Add them on the <a href="#" id="goCounters">Counters</a> page.</span></div>`}`;
-  $("#goCounters")?.addEventListener("click", e => { e.preventDefault(); view = "counters"; renderShell() });
-  document.querySelectorAll("[data-end]").forEach(b => b.onclick = async () => {
-    if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = `Confirm: check out ${b.dataset.name}`; clearInterval(tickTimer); return }
-    try { await rpc("cw_end_shift", { p_shift_id: Number(b.dataset.end) }); toast(`${b.dataset.name} checked out`); refreshBoard() } catch (err) { toast(err.message) }
-    tickTimer = setInterval(() => { if (board && view === "live") drawBoard(true) }, 5000);
-  });
-  if (textOnly || !boardMap) return;
+      <div class="stat"><b>${agents}</b><span>Agents checked in</span></div>`;
+    const wrap = $("#boardCards"), ids = new Set(sorted.map(c => String(c.id)));
+    keepFocus(() => {
+      [...wrap.children].forEach(el => { if (!ids.has(el.dataset.id)) el.remove() });
+      sorted.forEach((c, i) => {
+        const html = counterCard(c);
+        let el = wrap.querySelector(`:scope > [data-id="${c.id}"]`);
+        if (!el || el._html !== html) {
+          const t = document.createElement("template"); t.innerHTML = html.trim();
+          const fresh = t.content.firstElementChild; fresh._html = html;
+          if (el) el.replaceWith(fresh); else wrap.append(fresh);
+          el = fresh;
+        }
+        if (wrap.children[i] !== el) wrap.insertBefore(el, wrap.children[i]);  // only moves when a status changed
+      });
+    });
+    updateTimes(body);
+  }
+  if (!withMap || !boardMap) return;
   const color = { staffed: "#17803d", check: "#b45309", unmanned: "#c0322b" };
   boardLayer.clearLayers();
   const pts = [];
